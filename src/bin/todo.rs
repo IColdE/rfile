@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -14,13 +15,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Add a new task
     Add { task: String },
-    /// List all tasks
     List,
-    /// Mark a task as done
     Done { id: usize },
-    /// Remove a task
     Remove { id: usize },
 }
 
@@ -30,7 +27,7 @@ struct Task {
     completed: bool,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let file_path = PathBuf::from("tasks.json");
     
@@ -42,7 +39,7 @@ fn main() {
                 description: task.clone(),
                 completed: false,
             });
-            save_tasks(&file_path, &tasks);
+            save_tasks(&file_path, &tasks)?;
             println!("{} Added: {}", "SUCCESS:".green().bold(), task);
         }
         Commands::List => {
@@ -61,10 +58,12 @@ fn main() {
             }
         }
         Commands::Done { id } => {
-            if let Some(task) = tasks.get_mut(id - 1) {
-                task.completed = true;
-                save_tasks(&file_path, &tasks);
-                println!("{} Marked task {} as done!", "SUCCESS:".green().bold(), id);
+            if *id > 0 && *id <= tasks.len() {
+                if let Some(task) = tasks.get_mut(id - 1) {
+                    task.completed = true;
+                    save_tasks(&file_path, &tasks)?;
+                    println!("{} Marked task {} as done!", "SUCCESS:".green().bold(), id);
+                }
             } else {
                 println!("{} Task ID {} not found.", "ERROR:".red().bold(), id);
             }
@@ -72,13 +71,14 @@ fn main() {
         Commands::Remove { id } => {
             if *id > 0 && *id <= tasks.len() {
                 let removed = tasks.remove(id - 1);
-                save_tasks(&file_path, &tasks);
+                save_tasks(&file_path, &tasks)?;
                 println!("{} Removed: {}", "SUCCESS:".green().bold(), removed.description);
             } else {
                 println!("{} Task ID {} not found.", "ERROR:".red().bold(), id);
             }
         }
     }
+    Ok(())
 }
 
 fn load_tasks(path: &PathBuf) -> Vec<Task> {
@@ -89,7 +89,32 @@ fn load_tasks(path: &PathBuf) -> Vec<Task> {
     }
 }
 
-fn save_tasks(path: &PathBuf, tasks: &Vec<Task>) {
-    let data = serde_json::to_string_pretty(tasks).expect("Failed to serialize tasks");
-    fs::write(path, data).expect("Failed to write tasks to file");
+fn save_tasks(path: &PathBuf, tasks: &Vec<Task>) -> anyhow::Result<()> {
+    let data = serde_json::to_string_pretty(tasks).context("Failed to serialize tasks")?;
+    fs::write(path, data).context("Failed to write tasks to file")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_serialization() {
+        let tasks = vec![Task {
+            description: "Test task".to_string(),
+            completed: false,
+        }];
+        let json = serde_json::to_string(&tasks).unwrap();
+        assert!(json.contains("Test task"));
+    }
+
+    #[test]
+    fn test_task_deserialization() {
+        let json = r#"[{"description":"Test task","completed":true}]"#;
+        let tasks: Vec<Task> = serde_json::from_str(json).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].description, "Test task");
+        assert!(tasks[0].completed);
+    }
 }

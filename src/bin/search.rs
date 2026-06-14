@@ -1,45 +1,40 @@
+use anyhow::Context;
 use clap::Parser;
 use colored::*;
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use regex::Regex;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// A high-performance, colored file searcher and replacer in Rust.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// The pattern to search for (regex supported)
+    #[arg(help = "The pattern to search for")]
     pattern: String,
 
-    /// The replacement string (optional)
-    #[arg(short, long)]
+    #[arg(short, long, help = "The replacement string")]
     replace: Option<String>,
 
-    /// The directory to search in
-    #[arg(default_value = ".")]
+    #[arg(default_value = ".", help = "The directory to search in")]
     path: PathBuf,
 
-    /// Case-insensitive search
-    #[arg(short, long)]
+    #[arg(short, long, help = "Case-insensitive search")]
     ignore_case: bool,
 
-    /// Show line numbers
-    #[arg(short, long, default_value_t = true)]
+    #[arg(short, long, default_value_t = true, help = "Show line numbers")]
     line_numbers: bool,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     
-    // Build regex with options
     let mut regex_builder = regex::RegexBuilder::new(&args.pattern);
     regex_builder.case_insensitive(args.ignore_case);
     
-    let re = Arc::new(regex_builder.build().expect("Invalid regex pattern"));
+    let re = Arc::new(regex_builder.build().context("Invalid regex pattern")?);
 
     if let Some(replacement) = &args.replace {
         println!(
@@ -58,7 +53,6 @@ fn main() {
         );
     }
 
-    // Collect all files respecting .gitignore
     let files: Vec<PathBuf> = WalkBuilder::new(&args.path)
         .build()
         .filter_map(|e| e.ok())
@@ -66,16 +60,17 @@ fn main() {
         .map(|e| e.into_path())
         .collect();
 
-    // Process files in parallel
     files.into_par_iter().for_each(|path| {
         if let Err(e) = process_file(&path, &re, &args) {
             eprintln!("{}: {}", "Error processing".red(), path.display());
             eprintln!("  {}", e);
         }
     });
+
+    Ok(())
 }
 
-fn process_file(path: &Path, re: &Regex, args: &Args) -> std::io::Result<()> {
+fn process_file(path: &Path, re: &Regex, args: &Args) -> anyhow::Result<()> {
     if let Some(replacement) = &args.replace {
         replace_in_file(path, re, replacement)
     } else {
@@ -83,8 +78,8 @@ fn process_file(path: &Path, re: &Regex, args: &Args) -> std::io::Result<()> {
     }
 }
 
-fn search_in_file(path: &Path, re: &Regex, args: &Args) -> std::io::Result<()> {
-    let file = File::open(path)?;
+fn search_in_file(path: &Path, re: &Regex, args: &Args) -> anyhow::Result<()> {
+    let file = File::open(path).context("Failed to open file")?;
     let reader = BufReader::new(file);
     
     for (line_num, line) in reader.lines().enumerate() {
@@ -113,16 +108,40 @@ fn search_in_file(path: &Path, re: &Regex, args: &Args) -> std::io::Result<()> {
     Ok(())
 }
 
-fn replace_in_file(path: &Path, re: &Regex, replacement: &str) -> std::io::Result<()> {
-    let content = fs::read_to_string(path)?;
+fn replace_in_file(path: &Path, re: &Regex, replacement: &str) -> anyhow::Result<()> {
+    let content = fs::read_to_string(path).context("Failed to read file")?;
     if re.is_match(&content) {
         let new_content = re.replace_all(&content, replacement).to_string();
         
-        // Only write if something changed
         if content != new_content {
-            fs::write(path, new_content)?;
+            fs::write(path, new_content).context("Failed to write file")?;
             println!("{} {}", "Updated:".green().bold(), path.display().to_string().bright_blue());
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_regex_match() {
+        let re = Regex::new("rust").unwrap();
+        assert!(re.is_match("rust is fast"));
+    }
+
+    #[test]
+    fn test_regex_no_match() {
+        let re = Regex::new("rust").unwrap();
+        assert!(!re.is_match("java is okay"));
+    }
+
+    #[test]
+    fn test_regex_case_insensitive() {
+        let mut builder = regex::RegexBuilder::new("rust");
+        builder.case_insensitive(true);
+        let re = builder.build().unwrap();
+        assert!(re.is_match("RUST"));
+    }
 }
